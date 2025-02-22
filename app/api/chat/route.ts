@@ -1,7 +1,7 @@
 import { google } from '@ai-sdk/google';
 import { streamText, tool } from 'ai';
 import { z } from 'zod';
-import { findRelevantContent } from '@/lib/ai/embeddings';
+import { hybridRAG } from '@/lib/ai/embeddings';
 
 // Allow streaming responses up to 30 seconds
 export const maxDuration = 30;
@@ -20,23 +20,15 @@ export async function POST(req: Request) {
             `,
         messages,
         tools: {
-            // addResource: tool({
-            //     description: `add a resource to your knowledge base.
-            //     If the user provides a random piece of knowledge unprompted, use this tool without asking
-            //     for confirmation.`,
-            //     parameters: z.object({
-            //         content: z
-            //             .string()
-            //             .describe('The content or resource to add to knowledge base.'),
-            //     }),
-            //     execute: async ({ content }) => createResource({ content }),
-            // }),
             getInformation: tool({
-                description: `Get information from your knowledge base to user queries.`,
+                description: `Get hybrid information (both traditional and graph-based) from your knowledge base.`,
                 parameters: z.object({
-                    question: z.string().describe('the users question'),
+                    question: z.string().describe('the user\'s question'),
                 }),
-                execute: async ({ question}) => findRelevantContent(question),
+                execute: async ({ question }) => {
+                    const context = await hybridRAG(question);
+                    return JSON.stringify(context);
+                },
             }),
             // getMostRepeatedQuestion: tool({
             //     description: `Get the most repeated question from previous year question papers.`,

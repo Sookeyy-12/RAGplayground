@@ -2,6 +2,7 @@ import { embedMany, embed } from 'ai';
 import { google } from "@ai-sdk/google";
 import { DataAPIClient } from "@datastax/astra-db-ts";
 import dotenv from 'dotenv';
+import neo4j from 'neo4j-driver';
 
 dotenv.config();
 
@@ -14,6 +15,11 @@ const embeddingModel = google.textEmbeddingModel('text-embedding-004');
 
 const client = new DataAPIClient(ASTRA_DB_APPLICATION_TOKEN);
 const db = client.db(ASTRA_DB_API_ENDPOINT, { namespace: ASTRA_DB_NAMESPACE });
+
+const neo4jURI = process.env.NEO4J_URI || "bolt://localhost:7687";
+const neo4jUser = process.env.NEO4J_USER || "neo4j";
+const neo4jPassword = process.env.NEO4J_PASSWORD || "password";
+const driver = neo4j.driver(neo4jURI, neo4j.auth.basic(neo4jUser, neo4jPassword));
 
 const generateChunks = (input: string) => {
     return input
@@ -87,4 +93,41 @@ export const findFreqofQuestions = async () => {
         docContext = "";
     }
     return docContext;
+};
+
+export const findGraphRelevantContent = async (userQuery: string): Promise<string> => {
+    const userQueryEmbed = await generateEmbedding(userQuery);
+    const session = driver.session();
+    let docsMap: string[] = [];
+    try {
+        // Retrieve nodes from Neo4j
+        const result = await session.run(
+            "MATCH (n:Document) RETURN n.text as text, n.embedding as embedding"
+        );
+        // Calculate cosine similarity
+        const cosineSimilarity = (a: number[], b: number[]) => {
+            const dot = a.reduce((sum, cur, idx) => sum + (cur * (b[idx] || 0)), 0);
+            const normA = Math.sqrt(a.reduce((sum, cur) => sum + cur * cur, 0));
+            const normB = Math.sqrt(b.reduce((sum, cur) => sum + cur * cur, 0));
+            return normA && normB ? dot / (normA * normB) : 0;
+        };
+        // Map records & sort by similarity
+        const records = result.records.map(rec => ({
+            text: rec.get("text"),
+            embedding: rec.get("embedding")
+        }));
+        records.sort((a, b) => cosineSimilarity(b.embedding, userQueryEmbed) - cosineSimilarity(a.embedding, userQueryEmbed));
+        docsMap = records.slice(0, 10).map(r => r.text);
+    } catch (error) {
+        console.log("Error finding graph relevant content", error);
+    } finally {
+        await session.close();
+    }
+    return JSON.stringify(docsMap);
+};
+
+export const hybridRAG = async (userQuery: string): Promise<{ traditional: string; graph: string }> => {
+    const traditional = await findRelevantContent(userQuery);
+    const graph = await findGraphRelevantContent(userQuery);
+    return { traditional, graph };
 };
